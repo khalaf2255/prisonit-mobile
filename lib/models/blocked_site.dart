@@ -1,5 +1,5 @@
 class BlockedSite {
-  final string domain;
+  final String domain;
   final int reqTime;
   final int remainingSeconds;
   final int lockedSinceTicks;
