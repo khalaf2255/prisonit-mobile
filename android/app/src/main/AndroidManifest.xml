@@ -9,10 +9,13 @@
 
     <application
         android:label="PrisonIt"
-        android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:theme="@style/LaunchTheme">
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
 
         <activity
             android:name=".MainActivity"
