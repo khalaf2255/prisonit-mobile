@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/app_status.dart';
 import '../models/blocked_site.dart';
@@ -19,8 +20,45 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextEditingController _addDomainController = TextEditingController();
+  bool _isAccessibilityEnabled = true;
+  Timer? _statusTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkAccessibility();
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _checkAccessibility();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _statusTimer?.cancel();
+    _addDomainController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAccessibility();
+      widget.onRefresh();
+    }
+  }
+
+  Future<void> _checkAccessibility() async {
+    final enabled = await BlockingService.isAccessibilityServiceEnabled();
+    if (mounted && _isAccessibilityEnabled != enabled) {
+      setState(() {
+        _isAccessibilityEnabled = enabled;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +94,10 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Color(0xFFB194FF)),
-            onPressed: widget.onRefresh,
+            onPressed: () {
+              _checkAccessibility();
+              widget.onRefresh();
+            },
           ),
         ],
       ),
@@ -66,6 +107,41 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Permission Warning Banner if disabled
+              if (!_isAccessibilityEnabled)
+                GestureDetector(
+                  onTap: () async {
+                    await BlockingService.requestAccessibilityPermission();
+                    _checkAccessibility();
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2E1015),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFF87171), width: 1.5),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: Color(0xFFF87171), size: 24),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("⚠️ الحماية متوقفة حالياً!", style: TextStyle(color: Color(0xFFF87171), fontWeight: FontWeight.bold, fontSize: 13)),
+                              SizedBox(height: 2),
+                              Text("اضغط هنا لتفعيل إمكانية الوصول وبدء حظر المواقع.", style: TextStyle(color: Color(0xFFFFC0C0), fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_forward_ios, color: Color(0xFFF87171), size: 14),
+                      ],
+                    ),
+                  ),
+                ),
+
               // Mode & Status Badges Row
               Row(
                 children: [
@@ -87,9 +163,29 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _isAccessibilityEnabled ? const Color(0xFF10281C) : const Color(0xFF2E1015),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: _isAccessibilityEnabled ? const Color(0xFF34D399) : const Color(0xFFF87171),
+                      ),
+                    ),
+                    child: Text(
+                      _isAccessibilityEnabled ? "🟢 المراقبة نشطة" : "🔴 المراقبة متوقفة",
+                      style: TextStyle(
+                        color: _isAccessibilityEnabled ? const Color(0xFF34D399) : const Color(0xFFF87171),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 16),
+
               // Daily Motivational Card
               Container(
                 width: double.infinity,
@@ -115,6 +211,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SizedBox(height: 20),
+
               // Lock Duration Summary Card
               Container(
                 width: double.infinity,
@@ -129,14 +226,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       widget.status.isProduction
-                          ? "🔒 مدة فك قفل الموقع الواحد: ${widget.status.siteDays} يوم  |  فك التطبيق: ${widget.status.appDays} يوم"
-                          : "🧪 مدة فك قفل الموقع للتجربة: ${widget.status.siteDays} ثانية  |  فك التطبيق: ${widget.status.appDays} ثانية",
+                          ? "🔒 فك قفل الموقع: ${widget.status.siteDays} يوم  |  حذف التطبيق: ${widget.status.appDays} يوم"
+                          : "🧪 فك قفل الموقع: ${widget.status.siteDays} ثانية  |  حذف التطبيق: ${widget.status.appDays} ثانية",
                       style: const TextStyle(color: Color(0xFFF5F6FF), fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
+
               // Section Header: Blocked Sites
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -163,63 +261,58 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildSiteCard(BlockedSite site) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF181C30),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: site.isUnlocking ? const Color(0xFFF87171) : const Color(0xFF2A3050)),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A3050)),
       ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const Text("🌐", style: TextStyle(fontSize: 20)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  site.domain,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  site.isUnlocking
-                      ? "🔒 قيد فك القفل: متبقي ${TimeFormatter.formatArabicTimeSpanFromSeconds(site.remainingSeconds)}"
-                      : "🔒 محظور ومقفول بصرامة",
-                  style: TextStyle(
-                    color: site.isUnlocking ? const Color(0xFFF87171) : const Color(0xFF697091),
-                    fontSize: 11,
+          Row(
+            children: [
+              const Text("🔒", style: TextStyle(fontSize: 20)),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    site.domain,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
                   ),
-                ),
-              ],
-            ),
-          ),
-          if (!site.isUnlocking && !site.isUnlocked)
-            ElevatedButton(
-              onPressed: () => _requestUnlockSite(site),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1216),
-                side: const BorderSide(color: Color(0xFF6E232D)),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  const SizedBox(height: 2),
+                  const Text("محبوس ومحجوب تماماً", style: TextStyle(color: Color(0xFF697091), fontSize: 11)),
+                ],
               ),
-              child: const Text("فك القفل", style: TextStyle(color: Color(0xFFF87171), fontSize: 11, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          ElevatedButton(
+            onPressed: () => _requestUnlock(site),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A3050),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
+            child: const Text("طلب فك القفل", style: TextStyle(color: Color(0xFFA5ACCD), fontSize: 12)),
+          ),
         ],
       ),
     );
   }
 
   void _showAddDomainDialog() {
+    _addDomainController.clear();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF181C30),
-        title: const Text("إضافة موقع محظور جديد", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text("إضافة موقع للحبس 🔒", style: TextStyle(color: Colors.white, fontSize: 16)),
         content: TextField(
           controller: _addDomainController,
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
-            hintText: "مثال: reddit.com",
+            hintText: "مثال: zara.com أو reddit.com",
             hintStyle: TextStyle(color: Color(0xFF697091)),
             enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF7C4DFF))),
           ),
@@ -230,39 +323,57 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text("إلغاء", style: TextStyle(color: Color(0xFFA5ACCD))),
           ),
           ElevatedButton(
-            onPressed: () {
-              String raw = _addDomainController.text.trim().toLowerCase();
-              if (raw.isNotEmpty) {
-                String dom = raw.replaceAll("https://", "").replaceAll("http://", "").split('/')[0];
-                if (!widget.status.blockedSites.any((s) => s.domain == dom)) {
-                  widget.status.blockedSites.add(BlockedSite(domain: dom));
-                  BlockingService.saveStatus(widget.status);
+            onPressed: () async {
+              String domain = _addDomainController.text.trim().toLowerCase();
+              if (domain.isNotEmpty) {
+                domain = domain.replaceAll("https://", "").replaceAll("http://", "").replaceAll("www.", "");
+                int slash = domain.indexOf('/');
+                if (slash >= 0) domain = domain.substring(0, slash);
+
+                if (!widget.status.blockedSites.any((s) => s.domain == domain)) {
+                  widget.status.blockedSites.add(BlockedSite(domain: domain));
+                  await BlockingService.saveStatus(widget.status);
+                  Navigator.pop(ctx);
                   widget.onRefresh();
                 }
               }
-              _addDomainController.clear();
-              Navigator.pop(ctx);
             },
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF)),
-            child: const Text("حفظ وحظر", style: TextStyle(color: Colors.white)),
+            child: const Text("حبس الموقع 🔒", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
-  void _requestUnlockSite(BlockedSite site) async {
-    int delaySeconds = widget.status.isProduction ? widget.status.siteDays * 86400 : widget.status.siteDays;
-    
-    int index = widget.status.blockedSites.indexWhere((s) => s.domain == site.domain);
-    if (index >= 0) {
-      widget.status.blockedSites[index] = BlockedSite(
-        domain: site.domain,
-        reqTime: DateTime.now().microsecondsSinceEpoch * 10,
-        remainingSeconds: delaySeconds,
-      );
-      await BlockingService.saveStatus(widget.status);
-      widget.onRefresh();
-    }
+  void _requestUnlock(BlockedSite site) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF181C30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text("بدء العد التنازلي لفك قفل '${site.domain}'؟", style: const TextStyle(color: Colors.white, fontSize: 16)),
+        content: Text(
+          "سيبدأ عداد تنازلي مدته ${widget.status.siteDays} ${widget.status.isProduction ? 'يوم' : 'ثانية'}.\nسيبقى الموقع محظوراً بالكامل خلال هذه المدة.",
+          style: const TextStyle(color: Color(0xFFA5ACCD), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("إلغاء", style: TextStyle(color: Color(0xFFA5ACCD))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("بدأ العد التنازلي لفك '${site.domain}'")),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF)),
+            child: const Text("بدء العد التنازلي", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 }

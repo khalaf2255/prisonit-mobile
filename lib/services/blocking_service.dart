@@ -34,6 +34,7 @@ class BlockingService {
     return true;
   }
 
+  // 1. Accessibility Service
   static Future<bool> isAccessibilityServiceEnabled() async {
     try {
       final bool enabled = await _channel.invokeMethod('isAccessibilityEnabled');
@@ -49,6 +50,39 @@ class BlockingService {
     } catch (_) {}
   }
 
+  // 2. Overlay Permission
+  static Future<bool> isOverlayPermissionGranted() async {
+    try {
+      final bool granted = await _channel.invokeMethod('isOverlayPermissionGranted');
+      return granted;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> requestOverlayPermission() async {
+    try {
+      await _channel.invokeMethod('requestOverlayPermission');
+    } catch (_) {}
+  }
+
+  // 3. Battery Optimization
+  static Future<bool> isBatteryOptimizationIgnored() async {
+    try {
+      final bool ignored = await _channel.invokeMethod('isBatteryOptimizationIgnored');
+      return ignored;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> requestIgnoreBatteryOptimization() async {
+    try {
+      await _channel.invokeMethod('requestIgnoreBatteryOptimization');
+    } catch (_) {}
+  }
+
+  // 4. Device Admin
   static Future<bool> isDeviceAdminActive() async {
     try {
       final bool active = await _channel.invokeMethod('isDeviceAdminActive');
@@ -64,6 +98,7 @@ class BlockingService {
     } catch (_) {}
   }
 
+  // 5. VPN
   static Future<void> startLocalVpn() async {
     try {
       await _channel.invokeMethod('startVpn');

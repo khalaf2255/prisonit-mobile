@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/app_status.dart';
 import '../models/blocked_site.dart';
@@ -19,10 +20,16 @@ class SetupWizardScreen extends StatefulWidget {
   State<SetupWizardScreen> createState() => _SetupWizardScreenState();
 }
 
-class _SetupWizardScreenState extends State<SetupWizardScreen> {
+class _SetupWizardScreenState extends State<SetupWizardScreen> with WidgetsBindingObserver {
   int _currentStep = 0;
   bool _isProductionMode = true;
   bool _enableAdultBlock = true;
+
+  // Permissions state
+  bool _isAccessibilityEnabled = false;
+  bool _isOverlayGranted = false;
+  bool _isBatteryIgnored = false;
+  Timer? _permissionPollTimer;
 
   final TextEditingController _siteValueController = TextEditingController(text: "14");
   final TextEditingController _appValueController = TextEditingController(text: "30");
@@ -58,8 +65,45 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _selectedSiteUnit = _productionUnits[0];
     _selectedAppUnit = _productionUnits[0];
+    _checkPermissions();
+
+    // Poll permissions every 1.5 seconds when wizard is open
+    _permissionPollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      _checkPermissions();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _permissionPollTimer?.cancel();
+    _siteValueController.dispose();
+    _appValueController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissions();
+    }
+  }
+
+  Future<void> _checkPermissions() async {
+    final acc = await BlockingService.isAccessibilityServiceEnabled();
+    final over = await BlockingService.isOverlayPermissionGranted();
+    final bat = await BlockingService.isBatteryOptimizationIgnored();
+
+    if (mounted) {
+      setState(() {
+        _isAccessibilityEnabled = acc;
+        _isOverlayGranted = over;
+        _isBatteryIgnored = bat;
+      });
+    }
   }
 
   List<DurationUnit> get _activeUnits => _isProductionMode ? _productionUnits : _testingUnits;
@@ -98,12 +142,14 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       case 0:
         return _buildWelcomeStep();
       case 1:
-        return _buildModeStep();
+        return _buildPermissionsStep();
       case 2:
-        return _buildDurationStep();
+        return _buildModeStep();
       case 3:
-        return _buildSitesStep();
+        return _buildDurationStep();
       case 4:
+        return _buildSitesStep();
+      case 5:
         return _buildFinishStep();
       default:
         return Container();
@@ -141,7 +187,132 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     );
   }
 
-  // STEP 1: MODE SELECTION
+  // STEP 1: ONE-CLICK PERMISSIONS SETUP
+  Widget _buildPermissionsStep() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("تفعيل صلاحيات الحماية الصارمة", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          const Text("الخطوة 1 من 5 - تفعيل مراقبة المتصفح ومنع التجاوز", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
+          const SizedBox(height: 16),
+          const Text(
+            "اضغط على الأزرار بالأسفل لتفعيل الصلاحيات مباشرة بنقرة واحدة:",
+            style: TextStyle(color: Color(0xFFA5ACCD), fontSize: 13),
+          ),
+          const SizedBox(height: 18),
+
+          // 1. Accessibility Tile (Crucial)
+          _buildPermissionTile(
+            title: "خدمة مراقبة المواقع (Accessibility)",
+            desc: "لقراءة روابط المتصفح وإغلاق المواقع المحظورة لحظياً.",
+            isGranted: _isAccessibilityEnabled,
+            buttonText: "اضغط للتفعيل ➔",
+            onTap: () => BlockingService.requestAccessibilityPermission(),
+            isRequired: true,
+          ),
+          const SizedBox(height: 12),
+
+          // 2. Overlay Tile
+          _buildPermissionTile(
+            title: "الظهور فوق التطبيقات (Display Over Apps)",
+            desc: "لعرض شاشة القفل المحفزة فور محاولة فتح الموقع المحظور.",
+            isGranted: _isOverlayGranted,
+            buttonText: "اضغط للسماح ➔",
+            onTap: () => BlockingService.requestOverlayPermission(),
+            isRequired: false,
+          ),
+          const SizedBox(height: 12),
+
+          // 3. Battery Optimization Tile
+          _buildPermissionTile(
+            title: "استمرار الحماية بالخلفية (Battery Optimization)",
+            desc: "لمنع نظام أندرويد من إيقاف خدمة الحظر لتوفير البطارية.",
+            isGranted: _isBatteryIgnored,
+            buttonText: "اضغط للاستثناء ➔",
+            onTap: () => BlockingService.requestIgnoreBatteryOptimization(),
+            isRequired: false,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPermissionTile({
+    required String title,
+    required String desc,
+    required bool isGranted,
+    required String buttonText,
+    required VoidCallback onTap,
+    required bool isRequired,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181C30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isGranted ? const Color(0xFF34D399) : (isRequired ? const Color(0xFF7C4DFF) : const Color(0xFF2A3050)),
+          width: isGranted ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isGranted ? Icons.check_circle : (isRequired ? Icons.error_outline : Icons.info_outline),
+                color: isGranted ? const Color(0xFF34D399) : const Color(0xFFB194FF),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ),
+              if (isGranted)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10281C),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF34D399)),
+                  ),
+                  child: const Text("✓ مفعل", style: TextStyle(color: Color(0xFF34D399), fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(desc, style: const TextStyle(color: Color(0xFF697091), fontSize: 12)),
+          if (!isGranted) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: ElevatedButton(
+                onPressed: onTap,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF7C4DFF),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: Text(
+                  buttonText,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // STEP 2: MODE SELECTION
   Widget _buildModeStep() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -150,7 +321,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
         children: [
           const Text("اختر وضع التشغيل لنظام الحماية", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          const Text("الخطوة 1 من 4 - تحديد شدة الانضباط", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
+          const Text("الخطوة 2 من 5 - تحديد شدة الانضباط", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
           const SizedBox(height: 20),
           // Production Card
           GestureDetector(
@@ -248,29 +419,16 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1C162D),
+              color: const Color(0xFF181C30),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF503282)),
+              border: Border.all(color: const Color(0xFF2A3050)),
             ),
-            child: Row(
-              children: [
-                Checkbox(
-                  value: _enableAdultBlock,
-                  activeColor: const Color(0xFF34D399),
-                  onChanged: (val) => setState(() => _enableAdultBlock = val ?? true),
-                ),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("🔞 تفعيل درع حظر الإباحية (Anti-Porn Shield)", style: TextStyle(color: Color(0xFF34D399), fontWeight: FontWeight.bold, fontSize: 13)),
-                      SizedBox(height: 2),
-                      Text("فرض البحث الآمن SafeSearch وحظر المواقع الإباحية بالكامل.", style: TextStyle(color: Color(0xFF697091), fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ],
+            child: CheckboxListTile(
+              value: _enableAdultBlock,
+              activeColor: const Color(0xFF7C4DFF),
+              title: const Text("🔞 تفعيل درع حظر الإباحية التلقائي", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: const Text("حجب الكلمات المفتاحية والمواقع الإباحية والشبكات غير اللائقة تلقائياً.", style: TextStyle(color: Color(0xFF697091), fontSize: 11)),
+              onChanged: (val) => setState(() => _enableAdultBlock = val ?? true),
             ),
           ),
         ],
@@ -278,125 +436,119 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     );
   }
 
-  // STEP 2: DURATION SELECTION WITH DROPDOWN
+  // STEP 3: DURATION SELECTION
   Widget _buildDurationStep() {
-    int siteVal = int.tryParse(_siteValueController.text) ?? 1;
-    int appVal = int.tryParse(_appValueController.text) ?? 1;
-    int siteTotalSec = siteVal * _selectedSiteUnit.multiplier;
-    int appTotalSec = appVal * _selectedAppUnit.multiplier;
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("تحديد مدة العد التنازلي لإلغاء القفل", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text("حدد فترات الانتظار الصارمة", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Text(_isProductionMode ? "الخطوة 2 من 4 - تحديد فترات العد التنازلي (أيام فأكثر)" : "الخطوة 2 من 4 - تحديد فترات التجربة", style: const TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
+          const Text("الخطوة 3 من 5 - مهلة فك القفل وحذف التطبيق", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
           const SizedBox(height: 20),
-          // Single site delay
-          const Text("1. مدة إلغاء قفل الموقع الواحد:", style: TextStyle(color: Color(0xFFB194FF), fontWeight: FontWeight.bold, fontSize: 14)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              SizedBox(
-                width: 100,
-                child: TextField(
-                  controller: _siteValueController,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: const Color(0xFF181C30),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C4DFF))),
-                  ),
-                  onChanged: (v) => setState(() {}),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF181C30),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF7C4DFF), width: 1.5),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<DurationUnit>(
-                      value: _activeUnits.contains(_selectedSiteUnit) ? _selectedSiteUnit : _activeUnits[0],
-                      dropdownColor: const Color(0xFF181C30),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                      onChanged: (val) => setState(() => _selectedSiteUnit = val!),
-                      items: _activeUnits.map((u) => DropdownMenuItem(value: u, child: Text(u.name))).toList(),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+
+          // 1. Single Site Duration
+          _buildDurationCard(
+            title: "⏳ مدة فك قفل الموقع الواحد (Unlock Delay)",
+            desc: "كم تنتظر بعد طلب رفع الحظر عن موقع محدد:",
+            controller: _siteValueController,
+            selectedUnit: _selectedSiteUnit,
+            onUnitChanged: (unit) => setState(() => _selectedSiteUnit = unit),
           ),
-          const SizedBox(height: 6),
-          Text(
-            "✨ قفل الموقع: ${TimeFormatter.formatArabicTimeSpanFromSeconds(siteTotalSec)}",
-            style: const TextStyle(color: Color(0xFF34D399), fontSize: 12, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 24),
-          // App Uninstall delay
-          const Text("2. مدة حذف/فك تثبيت التطبيق بالكامل:", style: TextStyle(color: Color(0xFFB194FF), fontWeight: FontWeight.bold, fontSize: 14)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              SizedBox(
-                width: 100,
-                child: TextField(
-                  controller: _appValueController,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: const Color(0xFF181C30),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C4DFF))),
-                  ),
-                  onChanged: (v) => setState(() {}),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF181C30),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF7C4DFF), width: 1.5),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<DurationUnit>(
-                      value: _activeUnits.contains(_selectedAppUnit) ? _selectedAppUnit : _activeUnits[0],
-                      dropdownColor: const Color(0xFF181C30),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                      onChanged: (val) => setState(() => _selectedAppUnit = val!),
-                      items: _activeUnits.map((u) => DropdownMenuItem(value: u, child: Text(u.name))).toList(),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            "✨ قفل التطبيق: ${TimeFormatter.formatArabicTimeSpanFromSeconds(appTotalSec)}",
-            style: const TextStyle(color: Color(0xFF34D399), fontSize: 12, fontWeight: FontWeight.bold),
+          const SizedBox(height: 16),
+
+          // 2. Full App Uninstall Duration
+          _buildDurationCard(
+            title: "⚠️ مدة إلغاء تثبيت التطبيق كاملاً (App Uninstall)",
+            desc: "كم تنتظر بعد طلب حذف وإلغاء تطبيق PrisonIt نهائياً:",
+            controller: _appValueController,
+            selectedUnit: _selectedAppUnit,
+            onUnitChanged: (unit) => setState(() => _selectedAppUnit = unit),
           ),
         ],
       ),
     );
   }
 
-  // STEP 3: SITES SELECTION
+  Widget _buildDurationCard({
+    required String title,
+    required String desc,
+    required TextEditingController controller,
+    required DurationUnit selectedUnit,
+    required ValueChanged<DurationUnit> onUnitChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181C30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A3050)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+          const SizedBox(height: 4),
+          Text(desc, style: const TextStyle(color: Color(0xFF697091), fontSize: 11)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              SizedBox(
+                width: 80,
+                height: 44,
+                child: TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                  decoration: InputDecoration(
+                    contentPadding: EdgeInsets.zero,
+                    filled: true,
+                    fillColor: const Color(0xFF0F111C),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF2A3050))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF7C4DFF))),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F111C),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF2A3050)),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<DurationUnit>(
+                      value: selectedUnit,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF181C30),
+                      items: _activeUnits.map((u) {
+                        return DropdownMenuItem<DurationUnit>(
+                          value: u,
+                          child: Text(u.name, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) onUnitChanged(val);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // STEP 4: BLOCKED SITES
   Widget _buildSitesStep() {
-    final List<Map<String, String>> defaults = [
+    final defaults = [
       {'name': 'Facebook & Messenger', 'domain': 'facebook.com', 'icon': '📱'},
       {'name': 'YouTube', 'domain': 'youtube.com', 'icon': '🎥'},
       {'name': 'Instagram', 'domain': 'instagram.com', 'icon': '📸'},
@@ -411,7 +563,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
         children: [
           const Text("حدد المواقع المراد حبسها فوراً", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          const Text("الخطوة 3 من 4 - قائمة النطاقات المحظورة", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
+          const Text("الخطوة 4 من 5 - قائمة النطاقات المحظورة", style: TextStyle(color: Color(0xFFB194FF), fontSize: 12)),
           const SizedBox(height: 16),
           ...defaults.map((s) {
             bool isSelected = _selectedSites.contains(s['domain']);
@@ -444,7 +596,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     );
   }
 
-  // STEP 4: FINISH & CONFIRM
+  // STEP 5: FINISH & CONFIRM
   Widget _buildFinishStep() {
     int siteVal = int.tryParse(_siteValueController.text) ?? 1;
     int appVal = int.tryParse(_appValueController.text) ?? 1;
@@ -482,6 +634,8 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                 Text("• درع حظر الإباحية: ${_enableAdultBlock ? 'مفعل 🔞' : 'معطل ❌'}", style: const TextStyle(color: Color(0xFFA5ACCD), fontSize: 12)),
                 const SizedBox(height: 4),
                 Text("• النطاقات المحظورة: ${_selectedSites.length} موقع", style: const TextStyle(color: Color(0xFFA5ACCD), fontSize: 12)),
+                const SizedBox(height: 4),
+                Text("• مراقبة المتصفح: ${_isAccessibilityEnabled ? 'نشطة ✓' : 'يرجى التفعيل'}", style: TextStyle(color: _isAccessibilityEnabled ? const Color(0xFF34D399) : const Color(0xFFF87171), fontSize: 12)),
               ],
             ),
           ),
@@ -510,14 +664,24 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
             const SizedBox(),
           ElevatedButton(
             onPressed: () {
-              if (_currentStep < 4) {
+              if (_currentStep == 1 && !_isAccessibilityEnabled) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("يرجى الضغط على زر تفعيل خدمة مراقبة المواقع للمتابعة."),
+                    backgroundColor: Color(0xFF7C4DFF),
+                  ),
+                );
+                return;
+              }
+
+              if (_currentStep < 5) {
                 setState(() => _currentStep++);
               } else {
                 _finalizeSetup();
               }
             },
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF)),
-            child: Text(_currentStep == 4 ? "تأكيد وقفل الإعدادات فوراً 🔒" : "التالي →", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: Text(_currentStep == 5 ? "تأكيد وقفل الإعدادات فوراً 🔒" : "التالي →", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -544,6 +708,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     );
 
     await BlockingService.saveStatus(status);
+    await BlockingService.startLocalVpn();
     widget.onSetupFinished();
   }
 }
